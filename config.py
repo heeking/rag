@@ -24,3 +24,13 @@ CHUNK_SIZES = {
     "semantic": {"breakpoint_threshold_type": "percentile"},
     "paragraph": {},
 }
+
+# Retrieval settings
+RETRIEVAL_MODES = ["vector", "bm25", "hybrid"]
+DEFAULT_RETRIEVAL_MODE = "hybrid"
+SEARCH_K = 6  # retrieve more candidates before reranking
+
+# Reranker settings
+RERANK_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+RERANK_TOP_K = 3  # final number of docs after reranking
+RERANK_BACKEND = "cross-encoder"  # "cross-encoder", "llm", or "none"

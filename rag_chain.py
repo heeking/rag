@@ -1,17 +1,17 @@
 """
 RAG chain construction.
 
-Provides two modes:
-  - OpenAI-based LLM (requires API key)
-  - Fake/stub LLM for local-only demo without any API
+Supports three retrieval modes (vector / bm25 / hybrid) and optional reranking.
 """
 
 from __future__ import annotations
 
+from typing import List
+
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough
+from langchain_core.runnables import RunnableLambda, RunnablePassthrough
 from langchain_chroma import Chroma
 
 from config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL_NAME
@@ -38,16 +38,28 @@ def _format_docs(docs: list[Document]) -> str:
     )
 
 
-def build_rag_chain(vector_store: Chroma, search_k: int = 4):
+def build_rag_chain(
+    retriever,
+    reranker=None,
+    search_k: int = 4,
+):
     """
     Build a Retrieval-Augmented Generation chain.
 
-    If an OpenAI-compatible API key is configured, uses ChatOpenAI.
-    Otherwise falls back to a simple context-only mode that returns
-    the retrieved chunks directly (no LLM generation).
+    Parameters
+    ----------
+    retriever : BaseRetriever
+        Any LangChain-compatible retriever (vector, BM25, or hybrid).
+    reranker : optional
+        A reranker instance with a .rerank(query, docs) method.
     """
-    retriever = vector_store.as_retriever(search_kwargs={"k": search_k})
     prompt = ChatPromptTemplate.from_template(RAG_PROMPT_TEMPLATE)
+
+    def _retrieve_and_rerank(question: str) -> List[Document]:
+        docs = retriever.invoke(question)
+        if reranker is not None:
+            docs = reranker.rerank(question, docs)
+        return docs
 
     if LLM_API_KEY:
         from langchain_openai import ChatOpenAI
@@ -58,22 +70,26 @@ def build_rag_chain(vector_store: Chroma, search_k: int = 4):
             base_url=LLM_BASE_URL,
             temperature=0,
         )
+
         chain = (
-            {"context": retriever | _format_docs, "question": RunnablePassthrough()}
+            {
+                "context": RunnableLambda(_retrieve_and_rerank) | RunnableLambda(_format_docs),
+                "question": RunnablePassthrough(),
+            }
             | prompt
             | llm
             | StrOutputParser()
         )
     else:
         def _no_llm_fallback(question: str) -> str:
-            docs = retriever.invoke(question)
+            docs = _retrieve_and_rerank(question)
             context = _format_docs(docs)
             return (
-                f"[无 LLM 模式 — 仅展示检索结果]\n\n"
+                f"[无 LLM 模式 -- 仅展示检索结果]\n\n"
                 f"问题: {question}\n\n"
                 f"检索到的上下文:\n{context}"
             )
 
         chain = _no_llm_fallback
 
-    return chain, retriever
+    return chain, _retrieve_and_rerank
